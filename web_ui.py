@@ -1655,7 +1655,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       await fetch("/api/clips/" + filename, {method: "DELETE"});
       loadClips();
     }
-    }
 
     // YouTube Upload Modal
     function openUploadModal(filename) {
