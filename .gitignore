@@ -1,0 +1,56 @@
+# Secrets and OAuth credentials
+client_secrets.json
+token.json
+*.key
+*.pem
+.env
+
+# Local scheduler state
+scheduler_config.json
+
+# Media and temporary processing files
+temp/
+output/
+*.mp4
+*.mkv
+*.webm
+*.avi
+*.ts
+*.wav
+*.mp3
+*.part
+*.ass
+*.jpg
+*.jpeg
+*.png
+
+# Large binaries (Install via brew / apt / winget)
+bin/
+*.exe
+*.dmg
+
+# External reference repositories
+openshorts/
+
+# Python & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+
+# macOS / OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# IDE & System files
+.idea/
+.vscode/
+.system_generated/
