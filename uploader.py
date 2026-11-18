@@ -48,6 +48,11 @@ TITLE_TEMPLATES = [
     "SPEED CAUGHT THIS ROMANTIC MOMENT IN GTA VI! 😳❤️ #{clip_id} #GTAVI",
     "AYO SPEED COULD NOT HANDLE THIS GTA 6 SCENE! 💀😂 #{clip_id} #Shorts",
     "SPEED'S HILARIOUS REACTION TO GTA 6 KISS! 🤣 #{clip_id} #GamingShorts",
+    "IShowSpeed REACTION TO GTA 6 YACHT SCENE! 💀😳 #{clip_id} #Shorts",
+    "SPEED WAS NOT READY FOR THIS GTA 6 PARTY SCENE! 😭🔥 #{clip_id} #Shorts",
+    "SPEED'S JAW DROPPED AT THIS GTA VI SCENE! 🤯 #{clip_id} #GTAVI",
+    "AYO SPEED SAW THIS IN GTA 6 AND LOST IT! 💀😂 #{clip_id} #Shorts",
+    "LUCIA ON THE YACHT GOT SPEED ACTING UNWISE! 😭🔥 #{clip_id} #Shorts",
 ]
 
 DEFAULT_TAGS = [

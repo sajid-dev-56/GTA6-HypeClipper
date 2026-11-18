@@ -73,9 +73,9 @@ hype_detection:
   chat_velocity_weight: 0.5      # Weight of chat velocity in composite score
   audio_spike_weight: 0.5        # Weight of audio volume spike in composite score
   keyword_surge_multiplier: 1.5  # 1.5x boost when chat bursts with hype keywords
-  min_clip_spacing_seconds: 55.0 # Prevent overlapping 60-second clips
-  clip_pre_peak_seconds: 25.0    # 25 seconds before peak
-  clip_post_peak_seconds: 34.0   # 34 seconds after peak (Total: 59.0s - Perfect <60s YouTube Shorts limit)
+  min_clip_spacing_seconds: 45.0 # Prevent overlapping clips
+  clip_pre_peak_seconds: 20.0    # 20 seconds before peak
+  clip_post_peak_seconds: 28.0   # 28 seconds after peak (Total: 48.0s - Optimal Shorts Retention & Copyright-Safe)
   max_clips: 10                  # Default batch size: 10 viral clips
   hype_keywords:
     - "W"
@@ -117,11 +117,12 @@ hype_detection:
     - "NAHH"
     - "LOVE"
 
-# Romance & Story Cutscene Priority (Specifically targeting scenes after 06:30:00)
+# Romance, Yacht Party & 18+ Scene Priority (06:30:00 & 08:19:30+)
 romance_focus:
   enabled: true
   start_seconds: 23400          # 06:30:00 timestamp
-  boost_multiplier: 3.0         # 3x boost for romantic/kissing moments to guarantee they get uploaded
+  yacht_seconds: 29970          # 08:19:30 timestamp (Yacht party & Speed shock reactions)
+  boost_multiplier: 3.5         # 3.5x boost for viral shock/romance moments to guarantee they get picked
 
 # Hormozi-Style Dynamic Captions Engine
 captions:
