@@ -155,6 +155,13 @@ video_editor:
   audio_bitrate: "192k"
   ffmpeg_bin: null              # Path to ffmpeg binary (null uses system PATH or auto-find)
 
+# Clip Categorization & Disk Retention Settings
+categorization:
+  enabled: true
+  viral_score_threshold: 1.5   # Hype score >= 1.5 is auto-classified as "BEST" (Viral Potential)
+  auto_delete_clips: false     # Never auto-delete clips; user can prune normal clips manually
+  save_sidecar_metadata: true  # Saves .meta.json alongside each short
+
 # Optional YouTube Shorts Auto-Uploader (YouTube Data API v3)
 uploader:
   enabled: true
@@ -162,7 +169,7 @@ uploader:
   token_file: "token.json"
   privacy_status: "public"      # unlisted, public, private
   category_id: "20"             # 20 = Gaming
-  auto_cleanup_uploaded: true   # Auto-delete local MP4 after upload to save disk space
+  auto_cleanup_uploaded: false  # KEEP all clips on disk! Do not auto-delete.
   viral_only: true              # Strict filter: only upload top-tier hype clips (no boring moments)
   max_uploads_per_run: 2        # Upload only top 1-2 highest viral potential clips per cycle
   default_tags:

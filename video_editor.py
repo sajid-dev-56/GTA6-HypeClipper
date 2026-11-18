@@ -9,6 +9,7 @@ Renders vertical 9:16 (1080x1920) 60fps YouTube Shorts using direct FFmpeg filte
 - Burns Alex Hormozi dynamic ASS subtitles in a single-pass filtergraph for 60fps throughput.
 """
 
+import datetime
 import json
 import logging
 import os
@@ -313,5 +314,80 @@ def render_gaming_short(
     if not os.path.isfile(output_mp4_path) or os.path.getsize(output_mp4_path) == 0:
         raise RuntimeError(f"Render failed: Output file missing or empty: {output_mp4_path}")
 
+    # Classify clip as BEST (Viral Potential) or NORMAL (Safe to Delete) and save sidecar metadata
+    try:
+        classify_and_save_metadata(output_mp4_path, clip_info, config=config)
+    except Exception as me:
+        logger.warning(f"Could not write metadata for {output_mp4_path}: {me}")
+
     logger.info(f"Successfully generated 9:16 Short: {output_mp4_path}")
     return os.path.abspath(output_mp4_path)
+
+
+def classify_and_save_metadata(
+    output_mp4_path: str,
+    clip_info: Dict[str, Any],
+    config: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Classify clip as 'BEST' (Viral Potential) or 'NORMAL' (Safe to Delete).
+    Writes <output_mp4_path>.meta.json alongside the video file.
+    """
+    cfg = config or {}
+    cat_cfg = cfg.get("categorization", {})
+    threshold = float(cat_cfg.get("viral_score_threshold", 1.5))
+
+    hype_score = float(clip_info.get("hype_score", 0.0))
+    is_romance = bool(clip_info.get("is_romance", False))
+    start_t = float(clip_info.get("start_time", 0.0))
+
+    if start_t >= 23400.0 or "romance" in os.path.basename(output_mp4_path).lower():
+        is_romance = True
+
+    # Determine category
+    if is_romance:
+        category = "BEST"
+        badge = "🔥 BEST / VIRAL"
+        can_delete = False
+        reason = "❤️ Story / Romance Scene (High Viral Potential)"
+    elif hype_score >= threshold:
+        category = "BEST"
+        badge = "🔥 BEST / VIRAL"
+        can_delete = False
+        reason = f"⚡ Top Energy Spike (Hype Score: {hype_score:.2f} >= {threshold:.1f})"
+    elif clip_info.get("clip_id", 999) <= 2:
+        category = "BEST"
+        badge = "🔥 BEST / VIRAL"
+        can_delete = False
+        reason = f"🌟 Batch Top Pick (Hype Score: {hype_score:.2f})"
+    else:
+        category = "NORMAL"
+        badge = "⚡ NORMAL (CAN DELETE)"
+        can_delete = True
+        reason = f"Gameplay clip (Hype Score: {hype_score:.2f}) - Safe to delete if space needed"
+
+    meta_dict = {
+        "filename": os.path.basename(output_mp4_path),
+        "category": category,
+        "category_badge": badge,
+        "can_delete": can_delete,
+        "hype_score": round(hype_score, 2),
+        "is_romance": is_romance,
+        "reason": reason,
+        "start_time": clip_info.get("start_time"),
+        "end_time": clip_info.get("end_time"),
+        "duration": clip_info.get("duration"),
+        "uploaded": bool(clip_info.get("youtube_url")),
+        "youtube_url": clip_info.get("youtube_url"),
+        "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    meta_file = f"{os.path.splitext(output_mp4_path)[0]}.meta.json"
+    try:
+        with open(meta_file, "w", encoding="utf-8") as f:
+            json.dump(meta_dict, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Could not save metadata JSON {meta_file}: {e}")
+
+    return meta_dict
+

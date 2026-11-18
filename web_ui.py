@@ -269,6 +269,7 @@ def run_clipping_worker(
             )
 
             generate_thumbnail(final_mp4)
+            meta = load_or_classify_clip_meta(os.path.basename(final_mp4), output_dir)
 
             clip_record = {
                 "clip_id": c_id,
@@ -278,6 +279,10 @@ def run_clipping_worker(
                 "start_time": clip["start_time"],
                 "end_time": clip["end_time"],
                 "hype_score": clip.get("hype_score", 0.0),
+                "category": meta.get("category", "BEST"),
+                "category_badge": meta.get("category_badge", "🔥 BEST / VIRAL"),
+                "can_delete": meta.get("can_delete", False),
+                "reason": meta.get("reason", ""),
                 "youtube_url": None,
             }
             rendered_shorts.append(clip_record)
@@ -448,29 +453,111 @@ def api_logs_stream():
     return Response(event_stream(), mimetype="text/event-stream")
 
 
+def load_or_classify_clip_meta(filename: str, folder: str) -> Dict[str, Any]:
+    """Retrieve saved sidecar metadata or auto-classify existing legacy clips."""
+    base, _ = os.path.splitext(filename)
+    meta_path = os.path.join(folder, f"{base}.meta.json")
+
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+
+    # Heuristic classification for legacy or freshly rendered files
+    fname_lower = filename.lower()
+    is_best = False
+    reason = "Standard gameplay capture"
+
+    if "romance" in fname_lower or "kiss" in fname_lower:
+        is_best = True
+        reason = "❤️ Story / Romance Scene (High Viral Potential)"
+    elif "clip_01" in fname_lower or "clip_02" in fname_lower or "speed" in fname_lower or "chase" in fname_lower:
+        is_best = True
+        reason = "🔥 Top Energy Spike / Streamer Reaction"
+    else:
+        is_best = False
+        reason = "⚡ Standard gameplay - Safe to delete if space needed"
+
+    full_video_path = os.path.join(folder, filename)
+    created_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if os.path.isfile(full_video_path):
+        created_time = datetime.datetime.fromtimestamp(os.path.getmtime(full_video_path)).strftime("%Y-%m-%d %H:%M:%S")
+
+    meta = {
+        "filename": filename,
+        "category": "BEST" if is_best else "NORMAL",
+        "category_badge": "🔥 BEST / VIRAL" if is_best else "⚡ NORMAL (CAN DELETE)",
+        "can_delete": not is_best,
+        "hype_score": 2.2 if is_best else 0.8,
+        "is_romance": "romance" in fname_lower,
+        "reason": reason,
+        "uploaded": False,
+        "youtube_url": None,
+        "created_at": created_time,
+    }
+
+    try:
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+    except Exception:
+        pass
+
+    return meta
+
+
 @app.route("/api/clips")
 def api_clips():
-    """List all generated 9:16 Shorts with metadata."""
+    """List all generated 9:16 Shorts with category and viral classification."""
     folder = app.config["OUTPUT_FOLDER"]
     files = [f for f in os.listdir(folder) if f.endswith(".mp4")]
     files.sort(key=lambda x: os.path.getmtime(os.path.join(folder, x)), reverse=True)
 
     clips_list = []
+    best_count = 0
+    normal_count = 0
+    normal_size_mb = 0.0
+
     for f in files:
         full_path = os.path.join(folder, f)
         stat = os.stat(full_path)
+        size_mb = round(stat.st_size / (1024 * 1024), 2)
         thumb_name = f"{os.path.splitext(f)[0]}_thumb.jpg"
         has_thumb = os.path.isfile(os.path.join(folder, thumb_name))
 
+        meta = load_or_classify_clip_meta(f, folder)
+        category = meta.get("category", "NORMAL")
+        can_delete = meta.get("can_delete", True)
+
+        if category == "BEST":
+            best_count += 1
+        else:
+            normal_count += 1
+            normal_size_mb += size_mb
+
         clips_list.append({
             "filename": f,
-            "size_mb": round(stat.st_size / (1024 * 1024), 2),
-            "created_at": datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+            "size_mb": size_mb,
+            "created_at": meta.get("created_at") or datetime.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
             "has_thumbnail": has_thumb,
-            "duration": get_video_duration(full_path),
+            "duration": meta.get("duration") or get_video_duration(full_path),
+            "category": category,
+            "category_badge": meta.get("category_badge", "⚡ NORMAL (CAN DELETE)"),
+            "can_delete": can_delete,
+            "hype_score": meta.get("hype_score", 0.0),
+            "reason": meta.get("reason", "Gameplay moment"),
+            "uploaded": meta.get("uploaded", False),
+            "youtube_url": meta.get("youtube_url"),
         })
 
-    return jsonify({"clips": clips_list})
+    return jsonify({
+        "clips": clips_list,
+        "total_count": len(clips_list),
+        "best_count": best_count,
+        "normal_count": normal_count,
+        "normal_size_mb": round(normal_size_mb, 2),
+    })
 
 
 @app.route("/stream/<filename>")
@@ -503,14 +590,57 @@ def get_thumb(filename):
 
 @app.route("/api/clips/<filename>", methods=["DELETE"])
 def delete_clip(filename):
-    """Delete a clip and its thumbnail."""
-    v_path = os.path.join(app.config["OUTPUT_FOLDER"], filename)
-    thumb_path = os.path.join(app.config["OUTPUT_FOLDER"], f"{os.path.splitext(filename)[0]}_thumb.jpg")
+    """Delete a clip, its thumbnail, and sidecar metadata."""
+    folder = app.config["OUTPUT_FOLDER"]
+    v_path = os.path.join(folder, filename)
+    base = os.path.splitext(filename)[0]
+    thumb_path = os.path.join(folder, f"{base}_thumb.jpg")
+    meta_path = os.path.join(folder, f"{base}.meta.json")
+
     if os.path.isfile(v_path):
         os.remove(v_path)
     if os.path.isfile(thumb_path):
         os.remove(thumb_path)
+    if os.path.isfile(meta_path):
+        os.remove(meta_path)
     return jsonify({"status": "success", "deleted": filename})
+
+
+@app.route("/api/clips/prune-normal", methods=["POST"])
+def prune_normal_clips():
+    """Bulk delete all clips categorized as NORMAL / safe-to-delete to free disk space."""
+    folder = app.config["OUTPUT_FOLDER"]
+    files = [f for f in os.listdir(folder) if f.endswith(".mp4")]
+
+    deleted_files = []
+    freed_bytes = 0
+
+    for f in files:
+        meta = load_or_classify_clip_meta(f, folder)
+        if meta.get("category") == "NORMAL" or meta.get("can_delete", False):
+            v_path = os.path.join(folder, f)
+            base = os.path.splitext(f)[0]
+            thumb_path = os.path.join(folder, f"{base}_thumb.jpg")
+            meta_path = os.path.join(folder, f"{base}.meta.json")
+
+            if os.path.isfile(v_path):
+                freed_bytes += os.path.getsize(v_path)
+                os.remove(v_path)
+            if os.path.isfile(thumb_path):
+                os.remove(thumb_path)
+            if os.path.isfile(meta_path):
+                os.remove(meta_path)
+            deleted_files.append(f)
+
+    freed_mb = round(freed_bytes / (1024 * 1024), 2)
+    logger.info(f"Pruned {len(deleted_files)} normal clips, freed {freed_mb} MB storage.")
+    return jsonify({
+        "status": "success",
+        "deleted_count": len(deleted_files),
+        "deleted_files": deleted_files,
+        "freed_mb": freed_mb,
+    })
+
 
 
 def get_channel_title(token_file: str = "token.json") -> Optional[str]:
@@ -923,17 +1053,42 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
 
     <!-- ================================================================= -->
-    <!-- TAB 2: CLIPS GALLERY (Preview & Upload) -->
+    <!-- TAB 2: CLIPS GALLERY (Preview, Categorization & Upload) -->
     <!-- ================================================================= -->
     <div id="tab-gallery" class="hidden space-y-6">
-      <div class="flex items-center justify-between">
+      <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h2 class="text-2xl font-bold text-white">Generated YouTube Shorts</h2>
-          <p class="text-sm text-gray-400">Watch, download 1080p, or 1-click upload directly to YouTube.</p>
+          <h2 class="text-2xl font-bold text-white flex items-center space-x-2">
+            <span>Generated YouTube Shorts</span>
+            <span id="clips-total-badge" class="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-slate-800 text-brand-pink border border-brand-border">0</span>
+          </h2>
+          <p class="text-sm text-gray-400">Classified by AI: Best viral moments are saved, normal clips can be pruned to save space.</p>
         </div>
-        <button onclick="loadClips()" class="bg-slate-800 hover:bg-slate-700 text-sm text-white px-4 py-2 rounded-xl flex items-center space-x-2 border border-brand-border transition">
-          <i data-lucide="refresh-cw" class="w-4 h-4"></i>
-          <span>Refresh</span>
+        <div class="flex flex-wrap items-center gap-2">
+          <button id="btn-prune-normal" onclick="pruneNormalClips()" class="bg-rose-900/30 hover:bg-rose-900/50 text-rose-300 text-xs font-semibold px-3 py-2 rounded-xl flex items-center space-x-1.5 border border-rose-500/30 transition shadow-sm" title="Delete all normal/average clips to free disk space">
+            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+            <span>Prune Normal Clips (<span id="prune-mb-label">0 MB</span>)</span>
+          </button>
+          <button onclick="loadClips()" class="bg-slate-800 hover:bg-slate-700 text-xs text-white px-3 py-2 rounded-xl flex items-center space-x-1.5 border border-brand-border transition">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+            <span>Refresh</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Category Filter Tabs -->
+      <div class="flex items-center space-x-2 border-b border-brand-border pb-3 overflow-x-auto">
+        <button onclick="setClipFilter('all')" id="filter-all" class="px-3.5 py-1.5 text-xs font-bold rounded-lg bg-brand-pink text-white transition flex items-center space-x-1.5 shadow-md">
+          <span>All Clips</span>
+          <span id="filter-count-all" class="px-1.5 py-0.5 bg-black/30 rounded-full text-[10px]">0</span>
+        </button>
+        <button onclick="setClipFilter('best')" id="filter-best" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 transition flex items-center space-x-1.5 border border-amber-500/30">
+          <span>🔥 Best / Viral Only</span>
+          <span id="filter-count-best" class="px-1.5 py-0.5 bg-amber-500/20 rounded-full text-[10px]">0</span>
+        </button>
+        <button onclick="setClipFilter('normal')" id="filter-normal" class="px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition flex items-center space-x-1.5 border border-slate-700">
+          <span>⚡ Normal (Safe to Delete)</span>
+          <span id="filter-count-normal" class="px-1.5 py-0.5 bg-slate-700 rounded-full text-[10px]">0</span>
         </button>
       </div>
 
@@ -1323,21 +1478,56 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       setTimeout(pollStatus, 2000);
     }
 
-    // Load Clips Gallery
-    async function loadClips() {
-      try {
-        const res = await fetch("/api/clips");
-        const data = await res.json();
-        const grid = document.getElementById("clips-grid");
-        document.getElementById("clips-counter").textContent = data.clips.length;
+    // Clips Gallery State & Filtering
+    let allClipsData = [];
+    let activeClipFilter = 'all';
 
-        if (data.clips.length === 0) {
-          grid.innerHTML = '<div class="col-span-full text-center py-12 text-gray-500">No clips generated yet. Start clipping in the Studio tab!</div>';
-          return;
+    function setClipFilter(filter) {
+      activeClipFilter = filter;
+      ['all', 'best', 'normal'].forEach(f => {
+        const btn = document.getElementById('filter-' + f);
+        if (!btn) return;
+        if (f === filter) {
+          btn.className = "px-3.5 py-1.5 text-xs font-bold rounded-lg bg-brand-pink text-white transition flex items-center space-x-1.5 shadow-md";
+        } else {
+          btn.className = "px-3.5 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 hover:bg-slate-700 text-gray-300 transition flex items-center space-x-1.5 border border-brand-border";
         }
+      });
+      renderClipsGrid();
+    }
 
-        grid.innerHTML = data.clips.map(clip => `
-          <div class="bg-brand-card border border-brand-border rounded-2xl overflow-hidden shadow-xl hover:border-brand-pink/50 transition flex flex-col justify-between">
+    function renderClipsGrid() {
+      const grid = document.getElementById("clips-grid");
+      if (!grid) return;
+
+      let filtered = allClipsData;
+      if (activeClipFilter === 'best') {
+        filtered = allClipsData.filter(c => c.category === 'BEST');
+      } else if (activeClipFilter === 'normal') {
+        filtered = allClipsData.filter(c => c.category !== 'BEST');
+      }
+
+      if (filtered.length === 0) {
+        grid.innerHTML = '<div class="col-span-full text-center py-12 text-gray-500">No clips found in this category.</div>';
+        return;
+      }
+
+      grid.innerHTML = filtered.map(clip => {
+        const isBest = clip.category === 'BEST';
+        const badgeHtml = isBest
+          ? `<span class="px-2.5 py-0.5 text-[10px] font-bold rounded-full bg-gradient-to-r from-amber-500/30 to-red-500/30 text-amber-300 border border-amber-500/50 flex items-center space-x-1 shadow-sm">
+               <span>🔥 BEST / VIRAL</span>
+             </span>`
+          : `<span class="px-2.5 py-0.5 text-[10px] font-semibold rounded-full bg-slate-800/90 text-slate-300 border border-slate-700 flex items-center space-x-1">
+               <span>⚡ NORMAL (CAN DELETE)</span>
+             </span>`;
+
+        const uploadedBadge = clip.uploaded || clip.youtube_url
+          ? `<span class="px-2 py-0.5 text-[10px] font-bold rounded bg-emerald-500/30 text-emerald-300 border border-emerald-500/40">✅ UPLOADED</span>`
+          : '';
+
+        return `
+          <div class="bg-brand-card border ${isBest ? 'border-amber-500/40 shadow-amber-950/20' : 'border-brand-border'} rounded-2xl overflow-hidden shadow-xl hover:border-brand-pink/50 transition flex flex-col justify-between">
             <div class="relative aspect-[9/16] bg-black cursor-pointer group" onclick="openVideoModal('${clip.filename}')">
               <img src="/thumbnail/${clip.filename}" class="w-full h-full object-cover" onerror="this.src='/thumbnail/${clip.filename}'" alt="Short preview">
               <div class="absolute inset-0 bg-black/40 group-hover:bg-black/20 flex items-center justify-center transition">
@@ -1345,12 +1535,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                   <i data-lucide="play" class="w-6 h-6 ml-0.5"></i>
                 </div>
               </div>
-              <span class="absolute bottom-2 right-2 bg-black/80 text-[10px] font-mono px-2 py-0.5 rounded text-white">
+              <div class="absolute top-2 left-2 flex flex-col gap-1 z-10">
+                ${badgeHtml}
+                ${uploadedBadge}
+              </div>
+              <span class="absolute bottom-2 right-2 bg-black/80 text-[10px] font-mono px-2 py-0.5 rounded text-white z-10">
                 ${clip.duration ? clip.duration.toFixed(1) + 's' : '45.0s'}
               </span>
             </div>
             <div class="p-4 space-y-3">
-              <div class="text-xs font-mono text-gray-300 truncate" title="${clip.filename}">${clip.filename}</div>
+              <div class="text-xs font-mono text-gray-200 truncate font-semibold" title="${clip.filename}">${clip.filename}</div>
+              <div class="text-[11px] text-gray-400 line-clamp-1 italic" title="${clip.reason}">${clip.reason}</div>
               <div class="flex items-center justify-between text-[11px] text-gray-400">
                 <span>${clip.size_mb} MB</span>
                 <span>${clip.created_at}</span>
@@ -1361,18 +1556,71 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </a>
                 <button onclick="openUploadModal('${clip.filename}')" class="flex-1 bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 text-xs font-semibold py-2 px-3 rounded-lg flex items-center justify-center space-x-1.5 transition">
                   <i data-lucide="upload" class="w-3.5 h-3.5"></i>
-                  <span>Upload to YouTube</span>
+                  <span>Upload</span>
                 </button>
-                <button onclick="deleteClip('${clip.filename}')" class="p-2 rounded-lg bg-slate-800 hover:bg-rose-900/40 text-gray-400 hover:text-rose-400 transition" title="Delete">
+                <button onclick="deleteClip('${clip.filename}', ${isBest})" class="p-2 rounded-lg bg-slate-800 hover:bg-rose-900/40 text-gray-400 hover:text-rose-400 transition" title="${isBest ? 'Delete Best Clip (Warning)' : 'Delete Normal Clip (Safe)'}">
                   <i data-lucide="trash" class="w-4 h-4"></i>
                 </button>
               </div>
             </div>
           </div>
-        `).join('');
+        `;
+      }).join('');
 
-        lucide.createIcons();
-      } catch (e) {}
+      lucide.createIcons();
+    }
+
+    // Load Clips Gallery
+    async function loadClips() {
+      try {
+        const res = await fetch("/api/clips");
+        const data = await res.json();
+        allClipsData = data.clips || [];
+
+        document.getElementById("clips-counter").textContent = allClipsData.length;
+        if (document.getElementById("clips-total-badge")) {
+          document.getElementById("clips-total-badge").textContent = allClipsData.length;
+        }
+        if (document.getElementById("filter-count-all")) {
+          document.getElementById("filter-count-all").textContent = allClipsData.length;
+        }
+        if (document.getElementById("filter-count-best")) {
+          document.getElementById("filter-count-best").textContent = data.best_count || 0;
+        }
+        if (document.getElementById("filter-count-normal")) {
+          document.getElementById("filter-count-normal").textContent = data.normal_count || 0;
+        }
+        if (document.getElementById("prune-mb-label")) {
+          document.getElementById("prune-mb-label").textContent = (data.normal_size_mb || 0) + ' MB';
+        }
+
+        renderClipsGrid();
+      } catch (e) {
+        console.error("Failed to load clips:", e);
+      }
+    }
+
+    // Bulk Prune Normal Clips
+    async function pruneNormalClips() {
+      const count = document.getElementById("filter-count-normal")?.textContent || "0";
+      const mb = document.getElementById("prune-mb-label")?.textContent || "0 MB";
+      if (parseInt(count) === 0) {
+        alert("No normal clips found to prune! All current clips are categorized as BEST.");
+        return;
+      }
+
+      if (!confirm(`Are you sure you want to delete ${count} normal clips (${mb}) to free disk space?\n\nNOTE: All your BEST viral clips will stay 100% safe!`)) {
+        return;
+      }
+
+      try {
+        const res = await fetch("/api/clips/prune-normal", { method: "POST" });
+        const data = await res.json();
+        alert(`Pruned ${data.deleted_count} normal clips!\nFreed ${data.freed_mb} MB disk space.`);
+        loadClips();
+      } catch (err) {
+        alert("Failed to prune clips: " + err);
+      }
     }
 
     // Modal Video Player
@@ -1399,10 +1647,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     }
 
     // Delete Clip
-    async function deleteClip(filename) {
-      if (!confirm("Are you sure you want to delete " + filename + "?")) return;
+    async function deleteClip(filename, isBest) {
+      const warning = isBest
+        ? "⚠️ ATTENTION: This is classified as a BEST / VIRAL clip!\nAre you sure you want to delete " + filename + "?"
+        : "Are you sure you want to delete " + filename + "? (Safe to prune)";
+      if (!confirm(warning)) return;
       await fetch("/api/clips/" + filename, {method: "DELETE"});
       loadClips();
+    }
     }
 
     // YouTube Upload Modal

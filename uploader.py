@@ -303,7 +303,7 @@ def upload_all_generated_shorts(
     token_file = u_cfg.get("token_file", "token.json")
     privacy = u_cfg.get("privacy_status", "unlisted")
     custom_tags = u_cfg.get("default_tags", DEFAULT_TAGS)
-    auto_cleanup = bool(u_cfg.get("auto_cleanup_uploaded", True))
+    auto_cleanup = bool(u_cfg.get("auto_cleanup_uploaded", False))
     viral_only = bool(u_cfg.get("viral_only", True))
     max_uploads = int(u_cfg.get("max_uploads_per_run", 2))
 
@@ -346,13 +346,29 @@ def upload_all_generated_shorts(
             results.append(clip)
             logger.info(f"✅ Successfully uploaded to: https://www.youtube.com/shorts/{video_id}")
 
-            # Auto-cleanup of uploaded file to prevent disk space buildup
+            # Update sidecar metadata
+            meta_path = f"{os.path.splitext(mp4_path)[0]}.meta.json"
+            if os.path.isfile(meta_path):
+                try:
+                    with open(meta_path, "r", encoding="utf-8") as mf:
+                        mdata = json.load(mf)
+                    mdata["uploaded"] = True
+                    mdata["youtube_id"] = video_id
+                    mdata["youtube_url"] = f"https://www.youtube.com/shorts/{video_id}"
+                    with open(meta_path, "w", encoding="utf-8") as mf:
+                        json.dump(mdata, mf, indent=2)
+                except Exception:
+                    pass
+
+            # Auto-cleanup of uploaded file only if explicitly requested in config
             if auto_cleanup and os.path.isfile(mp4_path):
                 try:
                     os.remove(mp4_path)
                     thumb_path = f"{os.path.splitext(mp4_path)[0]}_thumb.jpg"
                     if os.path.isfile(thumb_path):
                         os.remove(thumb_path)
+                    if os.path.isfile(meta_path):
+                        os.remove(meta_path)
                     logger.info(f"🧹 Disk Cleanup: Removed uploaded short '{os.path.basename(mp4_path)}' to free storage space.")
                 except Exception as del_err:
                     logger.warning(f"Could not delete {mp4_path}: {del_err}")
